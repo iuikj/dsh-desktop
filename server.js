@@ -166,6 +166,21 @@ function resolveNpm() {
   return found[0] || null
 }
 
+function resolveNpx() {
+  if (process.env.DSH_NPX && fs.existsSync(process.env.DSH_NPX)) return process.env.DSH_NPX
+
+  const node = resolveNode()
+  if (node) {
+    const dir = path.dirname(node)
+    const names = process.platform === 'win32' ? ['npx.cmd', 'npx'] : ['npx']
+    for (const n of names) {
+      const cand = path.join(dir, n)
+      if (fs.existsSync(cand)) return cand
+    }
+  }
+  return which('npx')[0] || null
+}
+
 function resolveDshBin() {
   if (process.env.DSH_BIN && fs.existsSync(process.env.DSH_BIN)) return process.env.DSH_BIN
 
@@ -189,6 +204,7 @@ function detectDshStatus() {
     nodeFound: Boolean(nodePath),
     nodePath,
     npmPath: resolveNpm(),
+    npxPath: resolveNpx(),
     dshFound: Boolean(dshBin),
     dshBin,
     profileInitialized: fs.existsSync(profileBinPath()),
@@ -202,20 +218,35 @@ function startServer({ host = DEFAULT_HOST, port = DEFAULT_PORT, nodePath, binPa
   if (!node) {
     throw new Error('找不到 node.exe。请安装 Node.js，或在 config.json 里设置 nodePath。')
   }
-  const bin = binPath || resolveDshBin()
-  if (!bin) {
-    throw new Error('找不到 dsh 的 bin.js。请确认已安装 DeepSeek Harness，或在 config.json 里设置 dshBin。')
-  }
 
   const cwd = workspace && fs.existsSync(workspace) ? workspace : os.homedir()
-  const args = [bin, 'web', '--host', host, '--port', String(port)]
+  const env = { ...process.env, DSH_HOME: dshHome() }
+  const bin = binPath || resolveDshBin()
 
-  const child = spawn(node, args, {
-    cwd,
-    env: { ...process.env, DSH_HOME: dshHome() },
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  let child
+  if (bin) {
+    // 已安装：直接用 node 跑 bin.js（快路径）
+    child = spawn(node, [bin, 'web', '--host', host, '--port', String(port)], {
+      cwd,
+      env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } else {
+    // 未安装：走官方 npx 方式，自动下载 + 初始化 profile + 启动
+    const npx = resolveNpx()
+    if (!npx) {
+      throw new Error('找不到 npx，且 DeepSeek Harness 未安装。请先安装 Node.js（含 npx）。')
+    }
+    const cmd = `"${npx}" --yes ${DSH_PACKAGE} web --host ${host} --port ${String(port)}`
+    child = spawn(cmd, {
+      cwd,
+      env,
+      shell: true,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  }
 
   const forward = (chunk) => {
     const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
@@ -233,29 +264,27 @@ function startServer({ host = DEFAULT_HOST, port = DEFAULT_PORT, nodePath, binPa
 // ---------------------------------------------------------------- 安装 DSH
 
 /**
- * 用 npm 全局安装 DeepSeek Harness CLI。
+ * 按官方方式预下载 DeepSeek Harness CLI（npx 会缓存到本地，不污染全局）。
+ * 供安装器在安装阶段调用；应用首次启动也会自动走这条路径。
  * @param {{ onLog?: (text:string)=>void }} opts
- * @returns {Promise<{npmPath:string}>}
+ * @returns {Promise<{npxPath:string}>}
  */
 function installDsh({ onLog } = {}) {
   return new Promise((resolve, reject) => {
-    const npm = resolveNpm()
-    if (!npm) {
-      reject(new Error('找不到 npm。请先安装 Node.js（含 npm）。'))
+    const npx = resolveNpx()
+    if (!npx) {
+      reject(new Error('找不到 npx。请先安装 Node.js（含 npx）。'))
       return
     }
     const log = (text) => {
       if (typeof onLog === 'function') onLog(text)
     }
 
-    log(`使用 npm 全局安装 ${DSH_PACKAGE} …\n`)
-    log(`npm 路径：${npm}\n`)
+    log(`按官方方式通过 npx 下载 ${DSH_PACKAGE} …\n`)
+    log(`npx 路径：${npx}\n`)
 
-    // Windows 的 npm.cmd 需经 shell 运行；统一用 shell:true 拼接整条命令。
-    const cmd =
-      process.platform === 'win32'
-        ? `"${npm}" install -g ${DSH_PACKAGE}`
-        : `"${npm}" install -g ${DSH_PACKAGE}`
+    // npx --yes 跳过首次下载确认；--version 只下载+校验版本，不启动服务。
+    const cmd = `"${npx}" --yes ${DSH_PACKAGE} --version`
     const child = spawn(cmd, {
       shell: true,
       windowsHide: true,
@@ -281,10 +310,10 @@ function installDsh({ onLog } = {}) {
       if (settled) return
       settled = true
       if (code === 0) {
-        log('DeepSeek Harness 安装完成。\n')
-        resolve({ npmPath: npm })
+        log('DeepSeek Harness 下载完成。\n')
+        resolve({ npxPath: npx })
       } else {
-        const msg = `npm 安装退出码 ${code}`
+        const msg = `npx 下载退出码 ${code}`
         log(`[安装失败] ${msg}\n`)
         reject(new Error(msg))
       }
@@ -333,6 +362,7 @@ module.exports = {
   waitForServer,
   resolveNode,
   resolveNpm,
+  resolveNpx,
   resolveDshBin,
   detectDshStatus,
   startServer,

@@ -8,8 +8,8 @@
  *
  * 行为：
  *   - 已检测到 DSH（profile 本地 bin.js 或 PATH 上的 dsh）→ 退出 0，不重复安装；
- *   - 未检测到但找到 npm → npm 全局安装 @deepseek-ai/dsh，退出 0/1；
- *   - 找不到 Node.js/npm → 退出 2。
+ *   - 未检测到但找到 npx → 按官方方式 `npx --yes @deepseek-ai/dsh --version` 预下载，退出 0/1；
+ *   - 找不到 Node.js/npx → 退出 2。
  */
 
 const { spawn, spawnSync } = require('node:child_process')
@@ -61,17 +61,17 @@ function resolveNode() {
   return null
 }
 
-function resolveNpm() {
+function resolveNpx() {
   const node = resolveNode()
   if (node) {
     const dir = path.dirname(node)
-    const names = process.platform === 'win32' ? ['npm.cmd', 'npm'] : ['npm']
+    const names = process.platform === 'win32' ? ['npx.cmd', 'npx'] : ['npx']
     for (const n of names) {
       const cand = path.join(dir, n)
       if (fs.existsSync(cand)) return cand
     }
   }
-  return which('npm')[0] || null
+  return which('npx')[0] || null
 }
 
 function dshInstalled() {
@@ -81,15 +81,16 @@ function dshInstalled() {
 
 function install() {
   return new Promise((resolve) => {
-    const npm = resolveNpm()
-    if (!npm) {
-      log('未检测到 Node.js/npm，无法自动安装。请先安装 Node.js（含 npm）。\n')
+    const npx = resolveNpx()
+    if (!npx) {
+      log('未检测到 Node.js/npx，无法自动安装。请先安装 Node.js（含 npm/npx）。\n')
       resolve(2)
       return
     }
-    log(`使用 npm 安装 ${DSH_PACKAGE} …\n`)
-    log(`npm: ${npm}\n`)
-    const cmd = `"${npm}" install -g ${DSH_PACKAGE}`
+    log(`按官方方式通过 npx 下载 ${DSH_PACKAGE} …\n`)
+    log(`npx: ${npx}\n`)
+    // --version 只下载到 npx 缓存并校验版本，不启动服务
+    const cmd = `"${npx}" --yes ${DSH_PACKAGE} --version`
     const child = spawn(cmd, {
       shell: true,
       windowsHide: true,
@@ -104,7 +105,7 @@ function install() {
     })
     child.on('close', (code) => {
       if (code === 0) {
-        log('DeepSeek Harness 安装完成。\n')
+        log('DeepSeek Harness 下载完成。\n')
         resolve(0)
       } else {
         log(`安装失败（退出码 ${code}）。\n`)

@@ -398,26 +398,20 @@ async function boot() {
     if (!env.dshFound) {
       if (!env.nodeFound) {
         setStatus(
-          t('未检测到 Node.js。DeepSeek Harness 需要 Node.js 才能运行，请先安装 Node.js（含 npm）后重启本应用。', 'Node.js not found. DeepSeek Harness requires Node.js. Install Node.js (with npm) and restart.'),
+          t('未检测到 Node.js。DeepSeek Harness 需要 Node.js 才能运行，请先安装 Node.js（含 npm/npx）后重启本应用。', 'Node.js not found. DeepSeek Harness requires Node.js. Install Node.js (with npm/npx) and restart.'),
           true
         )
         return
       }
       if (!config.autoInstallDsh) {
         setStatus(
-          t('未检测到 DeepSeek Harness（已关闭自动安装）。请手动运行 npm install -g @deepseek-ai/dsh 后点击“重试”。', 'DeepSeek Harness not found (auto-install disabled). Run npm install -g @deepseek-ai/dsh then retry.'),
+          t('未检测到 DeepSeek Harness（已关闭自动安装）。请手动运行 npx @deepseek-ai/dsh web 后点击“重试”。', 'DeepSeek Harness not found (auto-install disabled). Run npx @deepseek-ai/dsh web then retry.'),
           true
         )
         return
       }
-      setStatus(t('未检测到 DeepSeek Harness，正在自动安装…（约需数分钟）', 'DeepSeek Harness not found, installing… (may take minutes)'))
-      try {
-        await server.installDsh({ onLog: (txt) => pushLog(txt) })
-      } catch (err) {
-        setStatus(t('DeepSeek Harness 安装失败：', 'DeepSeek Harness install failed: ') + err.message, true)
-        return
-      }
-      setStatus(t('安装完成，正在初始化服务…', 'Installed, initializing service…'))
+      // 首次运行：下面 startServer 会走官方 npx 方式自动下载 + 初始化 + 启动。
+      setStatus(t('未检测到 DeepSeek Harness，将通过 npx 自动下载并启动（首次约需数分钟）', 'DeepSeek Harness not found, downloading via npx (may take minutes on first run)'))
     }
 
     // 端口探测：已有 DSH 则直接连；被别的服务占用则自动换空闲端口。
@@ -455,9 +449,9 @@ async function boot() {
     }
 
     const ok = await server.waitForServer(config.host, config.port, {
-      timeoutMs: 180000,
+      timeoutMs: 360000,
       onProgress: (seconds) => {
-        setStatus(t(`服务启动中…（首次启动需初始化，已等待 ${seconds}s）`, `Starting… (${seconds}s)`))
+        setStatus(t(`服务启动中…（首次需下载/初始化，已等待 ${seconds}s）`, `Starting… (${seconds}s)`))
       },
     })
 
