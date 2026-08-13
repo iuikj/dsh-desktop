@@ -1,6 +1,19 @@
 'use strict'
 
-const { app, BrowserWindow, Menu, shell, ipcMain, dialog, desktopCapturer, screen } = require('electron')
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  shell,
+  ipcMain,
+  dialog,
+  desktopCapturer,
+  screen,
+  nativeTheme,
+  Notification,
+} = require('electron')
+const { autoUpdater } = require('electron-updater')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -15,16 +28,21 @@ const DEFAULT_CONFIG = {
   autoStart: true, // 服务未运行时是否自动启动
   autoInstallDsh: true, // 未检测到 DeepSeek Harness 时是否自动安装
   killOnQuit: true, // 退出时是否杀掉由本应用启动的服务
+  minimizeToTray: false, // 关闭窗口时是否最小化到托盘
+  locale: '', // 空串 => 跟随系统
   workspace: '', // 空串 => 使用用户主目录
   nodePath: '', // 空串 => 自动探测
   dshBin: '', // 空串 => 自动探测
 }
 
 let mainWindow = null
+let tray = null
 let spawnedChild = null
 let config = { ...DEFAULT_CONFIG }
 let latestStatus = { message: '正在初始化…', isError: false }
 let booting = false
+let isQuitting = false
+let saveStateTimer = null
 
 // ---------------------------------------------------------------- 配置
 
@@ -52,6 +70,78 @@ function saveConfig() {
 
 function serverUrl() {
   return `http://${config.host}:${config.port}`
+}
+
+// ---------------------------------------------------------------- 本地化
+
+function isZhLocale(locale) {
+  return String(locale || '').toLowerCase().startsWith('zh')
+}
+
+function uiLocale() {
+  const loc = config.locale || app.getLocale()
+  return isZhLocale(loc) ? 'zh' : 'en'
+}
+
+function t(zh, en) {
+  return uiLocale() === 'zh' ? zh : en
+}
+
+/** 顶层菜单标签（同时供原生菜单与标题栏按钮使用）。 */
+function topLevelMenus() {
+  return [
+    { id: 'menu-file', label: t('文件', 'File') },
+    { id: 'menu-edit', label: t('编辑', 'Edit') },
+    { id: 'menu-view', label: t('视图', 'View') },
+    { id: 'menu-window', label: t('窗口', 'Window') },
+    { id: 'menu-help', label: t('帮助', 'Help') },
+  ]
+}
+
+// ---------------------------------------------------------------- 窗口状态
+
+function windowStatePath() {
+  return path.join(app.getPath('userData'), 'window-state.json')
+}
+
+function loadWindowState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(windowStatePath(), 'utf8'))
+    if (s && Number.isFinite(s.width) && Number.isFinite(s.height)) return s
+  } catch (_) {
+    /* ignore */
+  }
+  return {}
+}
+
+function saveWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  try {
+    const bounds = mainWindow.getNormalBounds()
+    const state = { ...bounds, maximized: mainWindow.isMaximized() }
+    fs.mkdirSync(app.getPath('userData'), { recursive: true })
+    fs.writeFileSync(windowStatePath(), JSON.stringify(state), 'utf8')
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/** 校验窗口位置是否仍落在某个显示器内，避免换屏后窗口跑出视野。 */
+function ensureVisible(bounds) {
+  if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return null
+  const displays = screen.getAllDisplays()
+  for (const d of displays) {
+    const wa = d.workArea
+    if (
+      bounds.x < wa.x + wa.width - 80 &&
+      bounds.x + 80 > wa.x &&
+      bounds.y >= wa.y - 8 &&
+      bounds.y < wa.y + wa.height - 40
+    ) {
+      return { x: bounds.x, y: bounds.y }
+    }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------- 状态 / 日志
@@ -87,25 +177,40 @@ function logFile() {
   return path.join(logDir(), 'dsh-server.log')
 }
 
+// ---------------------------------------------------------------- 主题
+
+function currentBackgroundColor() {
+  return nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#f9fafb'
+}
+
 // ---------------------------------------------------------------- 窗口
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1320,
-    height: 860,
+  const state = loadWindowState()
+  const visible = ensureVisible(state)
+  const winOpts = {
+    width: state.width || 1320,
+    height: state.height || 860,
     minWidth: 960,
     minHeight: 640,
     title: APP_NAME,
     show: false,
-    frame: false, // 全自绘标题栏，与网页内容融为一体
-    backgroundColor: '#1b1b1c',
+    frame: false,
+    backgroundColor: currentBackgroundColor(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
-  })
+  }
+  if (visible) {
+    winOpts.x = visible.x
+    winOpts.y = visible.y
+  }
+
+  mainWindow = new BrowserWindow(winOpts)
+  if (state.maximized) mainWindow.maximize()
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'loading.html'))
 
@@ -121,14 +226,58 @@ function createWindow() {
   mainWindow.on('maximize', () => syncWinState())
   mainWindow.on('unmaximize', () => syncWinState())
 
+  const scheduleSave = () => {
+    clearTimeout(saveStateTimer)
+    saveStateTimer = setTimeout(saveWindowState, 500)
+  }
+  mainWindow.on('resize', scheduleSave)
+  mainWindow.on('move', scheduleSave)
+
+  mainWindow.on('close', (e) => {
+    saveWindowState()
+    if (!isQuitting && config.minimizeToTray && tray) {
+      e.preventDefault()
+      mainWindow.hide()
+      if (!config.minimizeToTrayNotified) {
+        notify('已最小化到托盘', 'DeepSeek Harness 仍在后台运行，点托盘图标可重新打开。')
+        config.minimizeToTrayNotified = true
+        saveConfig()
+      }
+    }
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  // 安全加固：外链用系统浏览器打开，禁止应用内新窗口/跳转。
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed = url.startsWith(serverUrl()) || url.startsWith('file://')
+    if (!allowed) {
+      event.preventDefault()
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url)
+    }
   })
 }
 
 function syncWinState() {
   if (!mainWindow || mainWindow.isDestroyed()) return
   mainWindow.webContents.send('dsh:win-state', { maximized: mainWindow.isMaximized() })
+}
+
+function showMainWindow() {
+  if (!mainWindow) {
+    createWindow()
+    boot()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
 }
 
 function navigateToServer() {
@@ -152,15 +301,10 @@ function maybeDebugShot() {
     try {
       const image = await mainWindow.webContents.capturePage()
       fs.writeFileSync(shotPath, image.toPNG())
-      // 导出窗口边界 + 整屏截图，用于无头验证外层圆角
       const primary0 = screen.getPrimaryDisplay()
       fs.writeFileSync(
         shotPath.replace(/\.png$/i, '.bounds.json'),
-        JSON.stringify({
-          bounds: mainWindow.getBounds(),
-          scaleFactor: primary0.scaleFactor,
-          workArea: primary0.workArea,
-        })
+        JSON.stringify({ bounds: mainWindow.getBounds(), scaleFactor: primary0.scaleFactor })
       )
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
@@ -181,46 +325,121 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+// ---------------------------------------------------------------- 托盘
+
+function trayIconPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'icons', 'icon-32.png')
+  }
+  return path.join(__dirname, 'build', 'icon-32.png')
+}
+
+function createTray() {
+  try {
+    const iconPath = trayIconPath()
+    if (!fs.existsSync(iconPath)) return
+    tray = new Tray(iconPath)
+    tray.setToolTip(APP_NAME)
+    const menu = Menu.buildFromTemplate([
+      { label: t('打开 DeepSeek Harness', 'Open DeepSeek Harness'), click: () => showMainWindow() },
+      { type: 'separator' },
+      { label: t('退出', 'Quit'), click: () => quitApp() },
+    ])
+    tray.setContextMenu(menu)
+    tray.on('click', () => showMainWindow())
+  } catch (err) {
+    console.error('[tray]', err)
+  }
+}
+
+function quitApp() {
+  isQuitting = true
+  app.quit()
+}
+
+// ---------------------------------------------------------------- 通知
+
+function notify(title, body) {
+  try {
+    if (Notification.isSupported()) {
+      new Notification({ title, body, icon: trayIconPath() }).show()
+    }
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+// ---------------------------------------------------------------- 首启引导
+
+function firstRunWizard() {
+  const flag = path.join(app.getPath('userData'), '.onboarded')
+  if (fs.existsSync(flag)) return
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true })
+    fs.writeFileSync(flag, String(Date.now()), 'utf8')
+    notify(
+      t('欢迎使用 DeepSeek Harness 桌面端', 'Welcome to DeepSeek Harness Desktop'),
+      t('服务会自动启动；左上角收起侧边栏；关闭窗口默认退出（可在 config.json 开启最小化到托盘）。', 'The service auto-starts. Sidebar toggle is top-left. Closing quits by default.')
+    )
+  } catch (_) {
+    /* ignore */
+  }
+}
+
 // ---------------------------------------------------------------- 启动流程
 
 async function boot() {
   if (booting) return
   booting = true
   try {
-    setStatus('正在检测 DeepSeek Harness 环境…')
+    setStatus(t('正在检测 DeepSeek Harness 环境…', 'Detecting DeepSeek Harness environment…'))
     const env = server.detectDshStatus()
 
     if (!env.dshFound) {
       if (!env.nodeFound) {
-        setStatus('未检测到 Node.js。DeepSeek Harness 需要 Node.js 才能运行，请先安装 Node.js（含 npm）后重启本应用。', true)
+        setStatus(
+          t('未检测到 Node.js。DeepSeek Harness 需要 Node.js 才能运行，请先安装 Node.js（含 npm）后重启本应用。', 'Node.js not found. DeepSeek Harness requires Node.js. Install Node.js (with npm) and restart.'),
+          true
+        )
         return
       }
       if (!config.autoInstallDsh) {
-        setStatus('未检测到 DeepSeek Harness（已关闭自动安装）。请手动运行 npm install -g @deepseek-ai/dsh 后点击“重试”。', true)
+        setStatus(
+          t('未检测到 DeepSeek Harness（已关闭自动安装）。请手动运行 npm install -g @deepseek-ai/dsh 后点击“重试”。', 'DeepSeek Harness not found (auto-install disabled). Run npm install -g @deepseek-ai/dsh then retry.'),
+          true
+        )
         return
       }
-      setStatus('未检测到 DeepSeek Harness，正在自动安装…（约需数分钟）')
+      setStatus(t('未检测到 DeepSeek Harness，正在自动安装…（约需数分钟）', 'DeepSeek Harness not found, installing… (may take minutes)'))
       try {
-        await server.installDsh({ onLog: (t) => pushLog(t) })
+        await server.installDsh({ onLog: (txt) => pushLog(txt) })
       } catch (err) {
-        setStatus('DeepSeek Harness 安装失败：' + err.message, true)
+        setStatus(t('DeepSeek Harness 安装失败：', 'DeepSeek Harness install failed: ') + err.message, true)
         return
       }
-      setStatus('安装完成，正在初始化服务…')
+      setStatus(t('安装完成，正在初始化服务…', 'Installed, initializing service…'))
     }
 
-    if (await server.isServerUp(config.host, config.port)) {
-      setStatus('服务已在运行，正在打开…')
+    // 端口探测：已有 DSH 则直接连；被别的服务占用则自动换空闲端口。
+    const up = await server.isServerUp(config.host, config.port)
+    if (up && (await server.isDshServer(config.host, config.port))) {
+      setStatus(t('服务已在运行，正在打开…', 'Service already running, opening…'))
       navigateToServer()
       return
     }
+    if (up) {
+      const freePort = await server.findFreePort(config.host, config.port)
+      setStatus(t(`端口 ${config.port} 被其他程序占用，改用 ${freePort}`, `Port ${config.port} is occupied, using ${freePort}`))
+      config.port = freePort
+      saveConfig()
+    }
 
     if (!config.autoStart) {
-      setStatus('服务未运行（已关闭自动启动）。请手动启动 dsh web 后点击“重试”。', true)
+      setStatus(t('服务未运行（已关闭自动启动）。请手动启动 dsh web 后点击“重试”。', 'Service not running (auto-start disabled).'), true)
       return
     }
 
-    setStatus('正在启动 DeepSeek Harness 服务…')
+    setStatus(t('正在启动 DeepSeek Harness 服务…', 'Starting DeepSeek Harness service…'))
     try {
       spawnedChild = server.startServer({
         host: config.host,
@@ -228,41 +447,45 @@ async function boot() {
         nodePath: config.nodePath || undefined,
         binPath: config.dshBin || undefined,
         workspace: config.workspace || os.homedir(),
-        onLog: (text) => pushLog(text),
+        onLog: (txt) => pushLog(txt),
       })
     } catch (err) {
-      setStatus('服务启动失败：' + err.message, true)
+      setStatus(t('服务启动失败：', 'Service start failed: ') + err.message, true)
       return
     }
 
     const ok = await server.waitForServer(config.host, config.port, {
       timeoutMs: 180000,
       onProgress: (seconds) => {
-        setStatus(`服务启动中…（首次启动需初始化，已等待 ${seconds}s）`)
+        setStatus(t(`服务启动中…（首次启动需初始化，已等待 ${seconds}s）`, `Starting… (${seconds}s)`))
       },
     })
 
     if (ok) {
-      setStatus('服务已就绪，正在打开…')
+      setStatus(t('服务已就绪，正在打开…', 'Service ready, opening…'))
+      if (mainWindow && !mainWindow.isVisible()) notify(t('服务已就绪', 'Service ready'), serverUrl())
       navigateToServer()
     } else {
-      setStatus('服务启动超时。请打开“帮助 → 打开日志目录”排查。', true)
+      setStatus(t('服务启动超时。请打开“帮助 → 查看日志”排查。', 'Service start timed out. Open Help → View logs.'), true)
     }
   } finally {
     booting = false
   }
 }
 
-// ---------------------------------------------------------------- 菜单（内嵌标题栏弹出）
+// ---------------------------------------------------------------- 菜单
 
 function buildMenuTemplate() {
+  const M = topLevelMenus()
+  const label = (id) => M.find((m) => m.id === id).label
   return [
     {
       id: 'menu-file',
-      label: '文件',
+      label: label('menu-file'),
       submenu: [
+        { label: t('选择工作目录…', 'Choose Workspace…'), click: () => chooseWorkspace() },
         {
-          label: '重新连接服务',
+          label: t('重新连接服务', 'Reconnect'),
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => {
             if (spawnedChild) {
@@ -273,12 +496,12 @@ function buildMenuTemplate() {
           },
         },
         { type: 'separator' },
-        { role: 'quit', label: '退出' },
+        { role: 'quit', label: t('退出', 'Quit') },
       ],
     },
     {
       id: 'menu-edit',
-      label: '编辑',
+      label: label('menu-edit'),
       submenu: [
         { role: 'undo' },
         { role: 'redo' },
@@ -291,7 +514,7 @@ function buildMenuTemplate() {
     },
     {
       id: 'menu-view',
-      label: '视图',
+      label: label('menu-view'),
       submenu: [
         { role: 'reload' },
         { role: 'forceReload' },
@@ -306,7 +529,7 @@ function buildMenuTemplate() {
     },
     {
       id: 'menu-window',
-      label: '窗口',
+      label: label('menu-window'),
       submenu: [
         { role: 'minimize' },
         { role: 'close' },
@@ -314,26 +537,96 @@ function buildMenuTemplate() {
     },
     {
       id: 'menu-help',
-      label: '帮助',
+      label: label('menu-help'),
       submenu: [
-        { label: '在浏览器中打开', click: () => shell.openExternal(serverUrl()) },
-        { label: '打开配置目录', click: () => shell.openPath(app.getPath('userData')) },
-        { label: '打开日志目录', click: () => shell.openPath(logDir()) },
+        { label: t('在浏览器中打开', 'Open in Browser'), click: () => shell.openExternal(serverUrl()) },
+        { label: t('查看日志', 'View Logs'), click: () => viewLogs() },
+        { label: t('打开配置目录', 'Open Config Folder'), click: () => shell.openPath(app.getPath('userData')) },
         { type: 'separator' },
         {
-          label: '关于',
+          label: t('关于', 'About'),
           click: () => {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
-              title: '关于',
+              title: t('关于', 'About'),
               message: APP_NAME,
-              detail: `版本 ${app.getVersion()}\n服务地址 ${serverUrl()}\n配置文件 ${configPath()}`,
+              detail: `${t('版本', 'Version')} ${app.getVersion()}\n${t('服务地址', 'Service')} ${serverUrl()}\n${t('配置文件', 'Config')} ${configPath()}`,
             })
           },
         },
       ],
     },
   ]
+}
+
+async function chooseWorkspace() {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: t('选择工作目录', 'Choose Workspace'),
+    properties: ['openDirectory', 'createDirectory'],
+  })
+  if (res.canceled || !res.filePaths.length) return
+  config.workspace = res.filePaths[0]
+  saveConfig()
+  setStatus(t('工作目录已设为：', 'Workspace set to: ') + config.workspace)
+}
+
+function viewLogs() {
+  const logPath = logFile()
+  let tail = ''
+  try {
+    const content = fs.readFileSync(logPath, 'utf8')
+    const lines = content.split(/\r?\n/)
+    tail = lines.slice(-60).join('\n')
+  } catch (_) {
+    tail = t('（暂无日志）', '(no logs yet)')
+  }
+  dialog
+    .showMessageBox(mainWindow, {
+      type: 'info',
+      title: t('服务日志（最近 60 行）', 'Service Logs (last 60 lines)'),
+      message: logPath,
+      detail: tail,
+      buttons: [t('关闭', 'Close'), t('打开完整日志', 'Open Full Log')],
+      defaultId: 0,
+      cancelId: 0,
+    })
+    .then((r) => {
+      if (r.response === 1) shell.openPath(logPath)
+    })
+    .catch(() => {})
+}
+
+// ---------------------------------------------------------------- 自动更新
+
+function setupAutoUpdater() {
+  if (!app.isPackaged) return // 开发模式不检查更新
+  try {
+    autoUpdater.autoDownload = true
+    autoUpdater.on('update-available', (info) => {
+      notify(t('发现新版本', 'Update available'), `${t('版本', 'Version')} ${info.version}`)
+    })
+    autoUpdater.on('update-downloaded', (info) => {
+      dialog
+        .showMessageBox(mainWindow, {
+          type: 'info',
+          title: t('更新已下载', 'Update Downloaded'),
+          message: t('新版本已下载，重启后生效。', 'A new version is ready. Restart to apply.'),
+          detail: `${t('版本', 'Version')} ${info.version}`,
+          buttons: [t('立即重启', 'Restart Now'), t('稍后', 'Later')],
+          defaultId: 0,
+        })
+        .then((r) => {
+          if (r.response === 0) autoUpdater.quitAndInstall()
+        })
+        .catch(() => {})
+    })
+    autoUpdater.on('error', (err) => {
+      console.error('[updater]', err && err.message)
+    })
+    autoUpdater.checkForUpdates().catch(() => {})
+  } catch (err) {
+    console.error('[updater]', err && err.message)
+  }
 }
 
 // ---------------------------------------------------------------- IPC
@@ -344,7 +637,10 @@ function registerIpc() {
     version: app.getVersion(),
     url: serverUrl(),
     status: latestStatus,
+    locale: uiLocale(),
+    menus: topLevelMenus(),
   }))
+  ipcMain.handle('dsh:menus', () => topLevelMenus())
   ipcMain.handle('dsh:retry', () => {
     if (spawnedChild) {
       server.killTree(spawnedChild)
@@ -356,7 +652,6 @@ function registerIpc() {
   ipcMain.handle('dsh:open-config', () => shell.openPath(app.getPath('userData')))
   ipcMain.handle('dsh:open-logs', () => shell.openPath(logDir()))
 
-  // ---- 自绘标题栏：窗口控制 ----
   ipcMain.on('dsh:win-minimize', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win) win.minimize()
@@ -376,7 +671,6 @@ function registerIpc() {
     return win ? win.isMaximized() : false
   })
 
-  // ---- 自绘标题栏：内嵌菜单弹出 ----
   ipcMain.on('dsh:menu-popup', (event, payload) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win || !payload) return
@@ -397,10 +691,7 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
-    }
+    showMainWindow()
   })
 
   app.whenReady().then(() => {
@@ -409,7 +700,15 @@ if (!gotLock) {
     Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate()))
     registerIpc()
     createWindow()
+    createTray()
+    nativeTheme.on('updated', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setBackgroundColor(currentBackgroundColor())
+      }
+    })
     boot()
+    firstRunWizard()
+    setupAutoUpdater()
   })
 
   app.on('activate', () => {
@@ -420,7 +719,12 @@ if (!gotLock) {
   })
 
   app.on('window-all-closed', () => {
-    app.quit()
+    if (!config.minimizeToTray) app.quit()
+  })
+
+  app.on('before-quit', () => {
+    isQuitting = true
+    saveWindowState()
   })
 
   app.on('will-quit', () => {

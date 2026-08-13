@@ -10,3 +10,10 @@
     DetailPrint "DeepSeek Harness 自动安装未完成；应用首次启动时会再次尝试自动安装。"
   ${EndIf}
 !macroend
+
+; 卸载阶段：询问是否同时删除应用自身的配置与日志（不会动 ~/.dsh 的会话数据）。
+!macro customUnInstall
+  MessageBox MB_YESNO "是否同时删除 DeepSeek Harness 桌面端的配置与日志？（不会删除你的 DSH 会话数据）" IDNO dsh_skip_cleanup
+    RMDir /r "$APPDATA\DeepSeek Harness"
+  dsh_skip_cleanup:
+!macroend

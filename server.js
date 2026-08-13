@@ -79,6 +79,39 @@ async function waitForServer(host, port, { intervalMs = 500, timeoutMs = 90000, 
   return false
 }
 
+/** 判断某个端口上应答的到底是不是 DSH（而非恰好占用了同端口的其他服务）。 */
+function isDshServer(host, port, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const req = http.request({ host, port, path: '/', method: 'GET', timeout: timeoutMs }, (res) => {
+      let body = ''
+      res.on('data', (c) => {
+        body += c.toString('utf8')
+        if (body.length > 20000) {
+          req.destroy()
+          resolve(false)
+        }
+      })
+      res.on('end', () => {
+        resolve(body.includes('__DSH_BOOT__') || body.includes('DeepSeek Harness'))
+      })
+    })
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+    req.end()
+  })
+}
+
+/** 从 startPort 起找一个空闲端口。 */
+async function findFreePort(host, startPort, maxTries = 50) {
+  for (let p = startPort; p < startPort + maxTries; p++) {
+    if (!(await isServerUp(host, p, 700))) return p
+  }
+  throw new Error(`在 ${startPort}-${startPort + maxTries - 1} 范围内找不到空闲端口`)
+}
+
 // ---------------------------------------------------------------- 定位可执行文件
 
 function which(name) {
@@ -259,17 +292,33 @@ function installDsh({ onLog } = {}) {
   })
 }
 
-/** 终止由本应用启动的服务进程树。 */
+/** 终止由本应用启动的服务进程树：先优雅，超时再强杀。 */
 function killTree(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return
+  const pid = child.pid
+  const alive = () => child.exitCode === null && child.signalCode === null
+  const force = () => {
+    try {
+      if (process.platform === 'win32') {
+        spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
+      } else {
+        child.kill('SIGKILL')
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
   try {
     if (process.platform === 'win32') {
-      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+      spawnSync('taskkill', ['/pid', String(pid), '/T'], { windowsHide: true })
     } else {
       child.kill('SIGTERM')
     }
+    setTimeout(() => {
+      if (alive()) force()
+    }, 2500)
   } catch (_) {
-    /* ignore */
+    force()
   }
 }
 
@@ -279,6 +328,8 @@ module.exports = {
   DSH_PACKAGE,
   dshHome,
   isServerUp,
+  isDshServer,
+  findFreePort,
   waitForServer,
   resolveNode,
   resolveNpm,

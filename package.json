@@ -32,7 +32,20 @@
       {
         "from": "scripts/bootstrap-dsh.cmd",
         "to": "scripts/bootstrap-dsh.cmd"
+      },
+      {
+        "from": "build/icon-32.png",
+        "to": "icons/icon-32.png"
       }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "iuikj",
+      "repo": "dsh-desktop"
+    },
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
     ],
     "win": {
       "target": [
@@ -45,12 +58,31 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "include": "build/installer.nsh"
-    }
+      "include": "build/installer.nsh",
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    },
+    "compression": "maximum"
   },
   "devDependencies": {
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
     "sharp": "^0.35.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('dshApp', {
   openInBrowser: () => ipcRenderer.invoke('dsh:open-in-browser'),
   openConfig: () => ipcRenderer.invoke('dsh:open-config'),
   openLogs: () => ipcRenderer.invoke('dsh:open-logs'),
+  getMenus: () => ipcRenderer.invoke('dsh:menus'),
 })
 
 // ---------------------------------------------------------------- 自绘标题栏
@@ -44,7 +45,7 @@ function titlebarCss() {
 #dsh-titlebar{position:fixed;top:0;left:0;right:0;height:${TITLEBAR_HEIGHT}px;display:flex;align-items:stretch;
   background:var(--dsw-specific-sidebar-fill,#1b1b1c);color:var(--dsw-alias-label-tertiary,#adb2b8);
   -webkit-app-region:drag;z-index:2147483647;user-select:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;}
-#dsh-titlebar .tb-sidebar-toggle{-webkit-app-region:no-drag;width:34px;margin-left:6px;display:flex;
+#dsh-titlebar .tb-sidebar-toggle{-webkit-app-region:no-drag;width:34px;margin-left:6px;padding:0;display:flex;
   align-items:center;justify-content:center;background:transparent;border:none;border-radius:6px;
   color:var(--dsw-alias-label-secondary,#cfd3d6);cursor:default;}
 #dsh-titlebar .tb-sidebar-toggle:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,0.08));}
@@ -66,13 +67,7 @@ function buildTitlebar() {
   bar.id = 'dsh-titlebar'
   bar.innerHTML = `
     <button class="tb-sidebar-toggle" title="收起/打开侧边栏">${ICONS.sidebar}</button>
-    <div class="tb-menus">
-      <button data-menu="menu-file">文件</button>
-      <button data-menu="menu-edit">编辑</button>
-      <button data-menu="menu-view">视图</button>
-      <button data-menu="menu-window">窗口</button>
-      <button data-menu="menu-help">帮助</button>
-    </div>
+    <div class="tb-menus"></div>
     <div class="tb-drag"></div>
     <div class="tb-controls">
       <button class="tb-min" title="最小化">${ICONS.min}</button>
@@ -81,6 +76,29 @@ function buildTitlebar() {
     </div>
   `
   return bar
+}
+
+// 用主进程返回的本地化标签填充标题栏菜单。
+function renderMenus(container, menus) {
+  container.innerHTML = ''
+  const items = Array.isArray(menus) && menus.length ? menus : [
+    { id: 'menu-file', label: '文件' },
+    { id: 'menu-edit', label: '编辑' },
+    { id: 'menu-view', label: '视图' },
+    { id: 'menu-window', label: '窗口' },
+    { id: 'menu-help', label: '帮助' },
+  ]
+  for (const m of items) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.dataset.menu = m.id
+    btn.textContent = m.label
+    btn.addEventListener('click', () => {
+      const r = btn.getBoundingClientRect()
+      ipcRenderer.send('dsh:menu-popup', { menu: m.id, x: r.left, y: r.bottom })
+    })
+    container.appendChild(btn)
+  }
 }
 
 // 找到 DSH 应用侧边栏的折叠按钮（优先哈希类，兜底按 aria-label 匹配中/英）。
@@ -117,13 +135,6 @@ function wireTitlebar(bar) {
     if (s && typeof s.maximized === 'boolean') setMaximized(s.maximized)
   })
   ipcRenderer.invoke('dsh:win-is-maximized').then(setMaximized).catch(() => {})
-
-  bar.querySelectorAll('.tb-menus button').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const r = btn.getBoundingClientRect()
-      ipcRenderer.send('dsh:menu-popup', { menu: btn.dataset.menu, x: r.left, y: r.bottom })
-    })
-  })
 }
 
 function injectTitlebar() {
@@ -135,6 +146,12 @@ function injectTitlebar() {
   const bar = buildTitlebar()
   ;(document.body || document.documentElement).appendChild(bar)
   wireTitlebar(bar)
+
+  const menusEl = bar.querySelector('.tb-menus')
+  ipcRenderer
+    .invoke('dsh:menus')
+    .then((menus) => renderMenus(menusEl, menus))
+    .catch(() => renderMenus(menusEl, null))
 }
 
 // ---------------- 仅对 DSH 网页本体的「浑然一体」注入 ----------------
