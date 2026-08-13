@@ -51,7 +51,8 @@
       "target": [
         "nsis",
         "zip"
-      ]
+      ],
+      "artifactName": "dsh-desktop-${version}-win.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -59,7 +60,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "include": "build/installer.nsh",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "dsh-desktop-setup-${version}.${ext}"
     },
     "mac": {
       "category": "public.app-category.developer-tools",
