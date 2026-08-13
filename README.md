@@ -93,5 +93,6 @@ Node.js（应用首次启动时也会再次尝试自动安装）。
 - [ ] 无 Node.js 环境下的一键安装 Node.js
 - [ ] macOS / Linux 打包验证
 --- 
-Friendship Link
-Thanks for the support and feedback from the friends at https://linux.do/.
+## Friendship Link
+
+Thanks for the support and feedback from the friends at [LINUX DO](https://linux.do/). 
