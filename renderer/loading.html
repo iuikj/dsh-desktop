@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepSeek Harness</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #151517;
+        --fg: #e6e8ec;
+        --muted: #8b919e;
+        --accent: #4d6bfe;
+        --error: #ef5350;
+        --card: #1b1b1c;
+        --border: #26272b;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: radial-gradient(1200px 600px at 50% -10%, #1c2330 0%, var(--bg) 55%);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .panel {
+        width: min(480px, 88vw);
+        text-align: center;
+      }
+      .logo {
+        width: 72px;
+        height: 72px;
+        margin: 0 auto 22px;
+        border-radius: 18px;
+        background: linear-gradient(135deg, #4d6bfe, #7b5cff);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 34px;
+        font-weight: 700;
+        box-shadow: 0 10px 40px rgba(77, 107, 254, 0.35);
+      }
+      h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; letter-spacing: 0.2px; }
+      .subtitle { color: var(--muted); font-size: 13px; margin: 0 0 30px; }
+      .spinner {
+        width: 26px; height: 26px; margin: 0 auto 18px;
+        border-radius: 50%;
+        border: 3px solid var(--border);
+        border-top-color: var(--accent);
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      #status { font-size: 14px; min-height: 20px; margin: 0; word-break: break-all; }
+      #status.error { color: var(--error); }
+      .actions {
+        margin-top: 24px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+      }
+      button {
+        appearance: none; border: 1px solid var(--border); background: var(--card); color: var(--fg);
+        padding: 9px 14px; border-radius: 9px; font-size: 13px; cursor: pointer;
+        transition: border-color 0.15s ease, transform 0.05s ease;
+      }
+      button:hover { border-color: var(--accent); }
+      button:active { transform: translateY(1px); }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .hidden { display: none !important; }
+      #logbox {
+        margin-top: 22px; text-align: left; max-height: 160px; overflow-y: auto;
+        background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border);
+        border-radius: 10px; padding: 10px 12px;
+      }
+      #log {
+        margin: 0; font-family: "SF Mono", Consolas, Menlo, monospace;
+        font-size: 11px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; word-break: break-all;
+      }
+      .hint { margin-top: 20px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+      .hint code {
+        background: var(--card); border: 1px solid var(--border);
+        padding: 1px 6px; border-radius: 5px; font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <div class="logo">DS</div>
+      <h1>DeepSeek Harness</h1>
+      <p class="subtitle">本地桌面端</p>
+      <div id="spinner" class="spinner"></div>
+      <p id="status">正在初始化…</p>
+      <div id="actions" class="actions hidden">
+        <button id="retry" class="primary">重试</button>
+        <button id="browser">在浏览器打开</button>
+        <button id="config">打开配置目录</button>
+      </div>
+      <div id="logbox" class="hidden"><pre id="log"></pre></div>
+      <div class="hint">
+        服务地址：<code id="url">http://127.0.0.1:3080</code><br />
+        若长时间停留在本页，请确认 <code>dsh</code> 已安装并可运行。
+      </div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById('status')
+      const spinnerEl = document.getElementById('spinner')
+      const actionsEl = document.getElementById('actions')
+      const urlEl = document.getElementById('url')
+      const logboxEl = document.getElementById('logbox')
+      const logEl = document.getElementById('log')
+
+      function setStatus(text, isError) {
+        statusEl.textContent = text
+        statusEl.classList.toggle('error', Boolean(isError))
+        spinnerEl.classList.toggle('hidden', Boolean(isError))
+        actionsEl.classList.toggle('hidden', !isError)
+      }
+
+      function appendLog(text) {
+        logboxEl.classList.remove('hidden')
+        logEl.textContent = (logEl.textContent + text).slice(-8000)
+        logboxEl.scrollTop = logboxEl.scrollHeight
+      }
+
+      function bind(id, method) {
+        const el = document.getElementById(id)
+        if (!el) return
+        el.addEventListener('click', () => {
+          if (window.dshApp && typeof window.dshApp[method] === 'function') window.dshApp[method]()
+        })
+      }
+      bind('retry', 'retry')
+      bind('browser', 'openInBrowser')
+      bind('config', 'openConfig')
+
+      async function init() {
+        if (window.dshApp && typeof window.dshApp.getAppInfo === 'function') {
+          try {
+            const info = await window.dshApp.getAppInfo()
+            if (info && info.url) urlEl.textContent = info.url
+            if (info && info.status) setStatus(info.status.message, info.status.isError)
+          } catch (_) {}
+        }
+        if (window.dshApp && typeof window.dshApp.onStatus === 'function') {
+          window.dshApp.onStatus((payload) => {
+            if (payload && typeof payload.message === 'string') setStatus(payload.message, payload.isError)
+          })
+        }
+        if (window.dshApp && typeof window.dshApp.onLog === 'function') {
+          window.dshApp.onLog((payload) => {
+            if (payload && typeof payload.text === 'string') appendLog(payload.text)
+          })
+        }
+      }
+      init()
+    </script>
+  </body>
+</html>

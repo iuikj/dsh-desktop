@@ -1,0 +1,55 @@
+{
+  "name": "dsh-desktop",
+  "productName": "DeepSeek Harness",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness 桌面端：把本地 Web GUI 封装为 Electron 应用",
+  "main": "main.js",
+  "author": "DSH Desktop",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.deepseek.harness.desktop",
+    "productName": "DeepSeek Harness",
+    "files": [
+      "main.js",
+      "server.js",
+      "preload.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "scripts/bootstrap-dsh.js",
+        "to": "scripts/bootstrap-dsh.js"
+      },
+      {
+        "from": "scripts/bootstrap-dsh.cmd",
+        "to": "scripts/bootstrap-dsh.cmd"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "include": "build/installer.nsh"
+    }
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3"
+  }
+}
