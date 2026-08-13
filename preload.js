@@ -5,6 +5,47 @@ const { contextBridge, ipcRenderer } = require('electron')
 // 与主进程 titleBar 高度保持一致：网页内容顶部预留自绘标题栏的空间。
 const TITLEBAR_HEIGHT = 40
 
+const TITLEBAR_COPY = {
+  en: {
+    sidebar: 'Toggle sidebar',
+    minimize: 'Minimize',
+    maximize: 'Maximize',
+    restore: 'Restore',
+    close: 'Close',
+    menus: {
+      'menu-file': 'File',
+      'menu-edit': 'Edit',
+      'menu-view': 'View',
+      'menu-window': 'Window',
+      'menu-help': 'Help',
+    },
+  },
+  zh: {
+    sidebar: '收起/打开侧边栏',
+    minimize: '最小化',
+    maximize: '最大化',
+    restore: '还原',
+    close: '关闭',
+    menus: {
+      'menu-file': '文件',
+      'menu-edit': '编辑',
+      'menu-view': '视图',
+      'menu-window': '窗口',
+      'menu-help': '帮助',
+    },
+  },
+}
+
+let titlebarLocale = navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+
+function setTitlebarLocale(locale) {
+  titlebarLocale = locale === 'zh' ? 'zh' : 'en'
+}
+
+function titlebarCopy() {
+  return TITLEBAR_COPY[titlebarLocale]
+}
+
 // ---------------------------------------------------------------- 应用桥
 
 contextBridge.exposeInMainWorld('dshApp', {
@@ -63,31 +104,39 @@ function titlebarCss() {
 }
 
 function buildTitlebar() {
+  const copy = titlebarCopy()
   const bar = document.createElement('div')
   bar.id = 'dsh-titlebar'
   bar.innerHTML = `
-    <button class="tb-sidebar-toggle" title="收起/打开侧边栏">${ICONS.sidebar}</button>
+    <button class="tb-sidebar-toggle" title="${copy.sidebar}">${ICONS.sidebar}</button>
     <div class="tb-menus"></div>
     <div class="tb-drag"></div>
     <div class="tb-controls">
-      <button class="tb-min" title="最小化">${ICONS.min}</button>
-      <button class="tb-max" title="最大化">${ICONS.max}</button>
-      <button class="tb-close" title="关闭">${ICONS.close}</button>
+      <button class="tb-min" title="${copy.minimize}">${ICONS.min}</button>
+      <button class="tb-max" title="${copy.maximize}">${ICONS.max}</button>
+      <button class="tb-close" title="${copy.close}">${ICONS.close}</button>
     </div>
   `
   return bar
 }
 
+function applyControlLabels(bar) {
+  const copy = titlebarCopy()
+  const sidebar = bar.querySelector('.tb-sidebar-toggle')
+  const min = bar.querySelector('.tb-min')
+  const max = bar.querySelector('.tb-max')
+  const close = bar.querySelector('.tb-close')
+  if (sidebar) sidebar.title = copy.sidebar
+  if (min) min.title = copy.minimize
+  if (max) max.title = max.dataset.maximized === 'true' ? copy.restore : copy.maximize
+  if (close) close.title = copy.close
+}
+
 // 用主进程返回的本地化标签填充标题栏菜单。
 function renderMenus(container, menus) {
   container.innerHTML = ''
-  const items = Array.isArray(menus) && menus.length ? menus : [
-    { id: 'menu-file', label: '文件' },
-    { id: 'menu-edit', label: '编辑' },
-    { id: 'menu-view', label: '视图' },
-    { id: 'menu-window', label: '窗口' },
-    { id: 'menu-help', label: '帮助' },
-  ]
+  const copy = titlebarCopy()
+  const items = Array.isArray(menus) && menus.length ? menus : Object.entries(copy.menus).map(([id, label]) => ({ id, label }))
   for (const m of items) {
     const btn = document.createElement('button')
     btn.type = 'button'
@@ -128,8 +177,9 @@ function wireTitlebar(bar) {
   })
 
   const setMaximized = (m) => {
+    maxBtn.dataset.maximized = String(Boolean(m))
     maxBtn.innerHTML = m ? ICONS.restore : ICONS.max
-    maxBtn.title = m ? '还原' : '最大化'
+    maxBtn.title = m ? titlebarCopy().restore : titlebarCopy().maximize
   }
   ipcRenderer.on('dsh:win-state', (_e, s) => {
     if (s && typeof s.maximized === 'boolean') setMaximized(s.maximized)
@@ -149,8 +199,12 @@ function injectTitlebar() {
 
   const menusEl = bar.querySelector('.tb-menus')
   ipcRenderer
-    .invoke('dsh:menus')
-    .then((menus) => renderMenus(menusEl, menus))
+    .invoke('dsh:app-info')
+    .then((info) => {
+      setTitlebarLocale(info && info.locale)
+      applyControlLabels(bar)
+      renderMenus(menusEl, info && info.menus)
+    })
     .catch(() => renderMenus(menusEl, null))
 }
 

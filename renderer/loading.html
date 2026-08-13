@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -90,28 +90,66 @@
         </svg>
       </div>
       <h1>DeepSeek Harness</h1>
-      <p class="subtitle">本地桌面端</p>
+      <p id="subtitle" class="subtitle">Desktop application</p>
       <div id="spinner" class="spinner"></div>
-      <p id="status">正在初始化…</p>
+      <p id="status">Initializing…</p>
       <div id="actions" class="actions hidden">
-        <button id="retry" class="primary">重试</button>
-        <button id="browser">在浏览器打开</button>
-        <button id="config">打开配置目录</button>
+        <button id="retry" class="primary">Retry</button>
+        <button id="browser">Open in Browser</button>
+        <button id="config">Open Configuration Folder</button>
       </div>
       <div id="logbox" class="hidden"><pre id="log"></pre></div>
       <div class="hint">
-        服务地址：<code id="url">http://127.0.0.1:3080</code><br />
-        若长时间停留在本页，请确认 <code>dsh</code> 已安装并可运行。
+        <span id="service-label">Service address:</span> <code id="url">http://127.0.0.1:3080</code><br />
+        <span id="hint-text">If this page remains open for a while, confirm that <code>dsh</code> is installed and can run.</span>
       </div>
     </div>
 
     <script>
+      const COPY = {
+        en: {
+          lang: 'en',
+          subtitle: 'Desktop application',
+          initialStatus: 'Initializing…',
+          retry: 'Retry',
+          browser: 'Open in Browser',
+          config: 'Open Configuration Folder',
+          serviceLabel: 'Service address:',
+          hint: 'If this page remains open for a while, confirm that <code>dsh</code> is installed and can run.',
+        },
+        zh: {
+          lang: 'zh-CN',
+          subtitle: '本地桌面端',
+          initialStatus: '正在初始化…',
+          retry: '重试',
+          browser: '在浏览器打开',
+          config: '打开配置目录',
+          serviceLabel: '服务地址：',
+          hint: '若长时间停留在本页，请确认 <code>dsh</code> 已安装并可运行。',
+        },
+      }
+
       const statusEl = document.getElementById('status')
       const spinnerEl = document.getElementById('spinner')
       const actionsEl = document.getElementById('actions')
       const urlEl = document.getElementById('url')
       const logboxEl = document.getElementById('logbox')
       const logEl = document.getElementById('log')
+      let copy = COPY.en
+
+      function setCopy(locale) {
+        copy = locale === 'zh' ? COPY.zh : COPY.en
+        document.documentElement.lang = copy.lang
+        document.getElementById('subtitle').textContent = copy.subtitle
+        document.getElementById('retry').textContent = copy.retry
+        document.getElementById('browser').textContent = copy.browser
+        document.getElementById('config').textContent = copy.config
+        document.getElementById('service-label').textContent = copy.serviceLabel
+        document.getElementById('hint-text').innerHTML = copy.hint
+        if (!statusEl.textContent || statusEl.textContent === COPY.en.initialStatus || statusEl.textContent === COPY.zh.initialStatus) {
+          statusEl.textContent = copy.initialStatus
+        }
+      }
 
       function setStatus(text, isError) {
         statusEl.textContent = text
@@ -136,11 +174,13 @@
       bind('retry', 'retry')
       bind('browser', 'openInBrowser')
       bind('config', 'openConfig')
+      setCopy(navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en')
 
       async function init() {
         if (window.dshApp && typeof window.dshApp.getAppInfo === 'function') {
           try {
             const info = await window.dshApp.getAppInfo()
+            if (info && info.locale) setCopy(info.locale)
             if (info && info.url) urlEl.textContent = info.url
             if (info && info.status) setStatus(info.status.message, info.status.isError)
           } catch (_) {}
