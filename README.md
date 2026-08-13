@@ -3,11 +3,17 @@
 把 DeepSeek Harness 的本地 Web GUI（默认 `http://127.0.0.1:3080`）封装成一个
 Electron 桌面应用，让它可以像独立软件一样双击启动、独立窗口运行。
 
+## 截图
+
+![DeepSeek Harness 桌面端主窗口](docs/images/screenshot-1.png)
+
+![DeepSeek Harness 桌面端](docs/images/screenshot-2.png)
+
 ## 它能做什么
 
 - **无缝窗口（全自绘标题栏）**：完全抛弃原生标题栏（`frame: false`），标题栏与侧边栏同色、连成 L 形整体面；`文件/编辑/视图/窗口/帮助` 纯文字菜单直接嵌进标题栏，右上角为自绘的最小化/最大化/关闭键；内容区是一张左上角带圆角、略亮一档的「浮起卡片」，底面颜色从圆角缺口透出；标题栏/侧边栏底色跟随主题（亮/暗）实时切换，观感浑然一体。
 - **智能连接**：启动时先探测目标端口是否已有服务在运行，有则直接加载，没有则自动启动。
-- **自动安装 DSH**：启动时检测本机是否已装 DeepSeek Harness，缺失且检测到 Node.js 时自动用 npm 安装（带进度日志）。
+- **自动安装 DSH**：启动时检测本机是否已装 DeepSeek Harness，缺失且检测到 Node.js 时按官方方式用 `npx @deepseek-ai/dsh` 自动下载并启动（带进度日志）。
 - **自动启动服务**：若服务未运行，会自动用系统 Node.js 拉起 `dsh web --host 127.0.0.1 --port 3080`。
 - **就绪等待页**：服务冷启动 / 首次安装期间显示加载页与安装日志，就绪后自动跳转。
 - **只清理自己启动的服务**：退出时只会杀掉由本应用启动的服务，不会误杀你已经手动启动的 Harness。
@@ -33,8 +39,8 @@ dsh-app/
 
 ## 环境要求
 
-- Node.js（`dsh` 依赖系统 Node 运行，需能被 `where node` 找到）
-- 已安装 DeepSeek Harness（`dsh` 命令可用，或 `$DSH_HOME/profiles` 已初始化）
+- Node.js（含 npm/npx，`dsh` 依赖系统 Node 运行，需能被 `where node` 找到）
+- DeepSeek Harness 无需手动安装：应用启动时会自动探测，缺失则用 `npx @deepseek-ai/dsh` 自动下载
 
 ## 本地运行
 
@@ -54,8 +60,8 @@ npm run dist
 ```
 
 安装器安装阶段会自动检测本机是否已装 DeepSeek Harness：已装则直接装应用；
-未装且能找到 Node.js/npm 时，会顺带用 npm 自动安装 DSH；找不到 Node.js 则提示先装
-Node.js（应用首次启动时也会再次尝试自动安装）。
+未装且能找到 Node.js/npx 时，会顺带用 `npx @deepseek-ai/dsh` 预下载；找不到 Node.js
+则提示先装 Node.js（应用首次启动时也会再次尝试自动下载）。
 
 ## 配置
 
@@ -87,12 +93,13 @@ Node.js（应用首次启动时也会再次尝试自动安装）。
 
 ## 待完善（Roadmap）
 
-- [ ] 托盘图标 + 最小化到托盘
-- [ ] 启动时支持选择 / 记忆 workspace 目录
-- [ ] 端口冲突时的友好提示与自动换端口
+- [ ] 代码签名（需购买代码签名证书，通过后免除 SmartScreen 警告）
 - [ ] 无 Node.js 环境下的一键安装 Node.js
-- [ ] macOS / Linux 打包验证
---- 
+- [ ] macOS / Linux 打包实测（已加配置，未在真机验证）
+- [ ] GitHub Release 自动更新端到端验证
+
+---
+
 ## Friendship Link
 
-Thanks for the support and feedback from the friends at [LINUX DO](https://linux.do/). 
+Thanks for the support and feedback from the friends at [LINUX DO](https://linux.do/).
